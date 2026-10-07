@@ -29,7 +29,7 @@ use kurbo::{Affine, BezPath, Point, Rect, Vec2};
 pub use layout::{layout, layout_with};
 pub use vectorcraft_doc::TextObject;
 
-pub use vectorcraft_doc::FirstBaseline;
+pub use vectorcraft_doc::{AreaFit, FirstBaseline};
 
 /// Paragraph composer (Paragraph panel menu).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,6 +55,9 @@ pub struct LayoutOptions {
     pub first_baseline: FirstBaseline,
     /// Minimum first-baseline offset in points.
     pub first_baseline_min: f64,
+    /// Area type only: Shrink Text to Fit scales overflowing text down at layout time (see
+    /// [`TextLayout::fit_scale`]); the other fits are the engine's business and lay out as `None`.
+    pub fit: AreaFit,
     pub composer: Composer,
     pub features: OtFeatures,
 }
@@ -68,6 +71,7 @@ impl Default for LayoutOptions {
             inset: 0.0,
             first_baseline: FirstBaseline::Ascent,
             first_baseline_min: 0.0,
+            fit: AreaFit::None,
             composer: Composer::EveryLine,
             features: OtFeatures::default(),
         }
@@ -130,7 +134,7 @@ pub struct LineInfo {
     pub avail: (f64, f64),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TextLayout {
     /// Lines retain inline/block coordinates; glyph geometry is in physical text space.
     pub vertical: bool,
@@ -148,6 +152,25 @@ pub struct TextLayout {
     pub on_path: bool,
     /// Area type: the frame cells text flowed into (one per row/column).
     pub frames: Vec<Rect>,
+    /// Shrink Text to Fit: the factor the text's sizes, leading and baseline shifts were scaled
+    /// by to fit its frame (1.0 when the text is not shrunk).
+    pub fit_scale: f64,
+}
+
+impl Default for TextLayout {
+    fn default() -> Self {
+        Self {
+            vertical: false,
+            line_xf: Affine::IDENTITY,
+            glyphs: Vec::new(),
+            lines: Vec::new(),
+            bounds: Rect::ZERO,
+            overflow: false,
+            on_path: false,
+            frames: Vec::new(),
+            fit_scale: 1.0,
+        }
+    }
 }
 
 impl TextLayout {
@@ -448,6 +471,8 @@ mod tests;
 mod tests_bidi;
 #[cfg(test)]
 mod tests_embed;
+#[cfg(test)]
+mod tests_fit;
 #[cfg(test)]
 mod tests_scripts;
 #[cfg(test)]

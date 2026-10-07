@@ -113,6 +113,13 @@ pub fn rich_session() -> Session {
     let l = id_of(&exec(&mut s, "shape.line", json!({"x1": 20, "y1": 300, "x2": 200, "y2": 350})));
     exec(&mut s, "stroke.set", json!({"weight": 3, "endArrow": "Arrow"}));
     let _ = id_of(&exec(&mut s, "text.create", json!({"x": 250, "y": 300, "text": "VectorCraft", "size": 30})));
+    // Area type that shrinks its text to fit (a non-default Area Type Options fit).
+    let _ = id_of(&exec(
+        &mut s,
+        "text.create",
+        json!({"x": 300, "y": 330, "size": 14, "text": "Area type shrinks its text to fit the frame.",
+               "area": {"width": 150, "height": 40, "fit": "shrinkText", "fitMinPercent": 40}}),
+    ));
     exec(&mut s, "layer.new", json!({"name": "Top"}));
     let d = rect(&mut s, 350.0, 200.0, 80.0, 80.0);
     let e = ellipse(&mut s, 380.0, 230.0, 80.0, 80.0);
