@@ -1429,6 +1429,8 @@ mod tests_paintproxy;
 #[cfg(test)]
 mod tests_panelcmds;
 #[cfg(test)]
+mod tests_paragraphs;
+#[cfg(test)]
 mod tests_pathops;
 #[cfg(test)]
 mod tests_pathtype;

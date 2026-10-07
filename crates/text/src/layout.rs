@@ -175,7 +175,7 @@ pub fn layout_with(db: &FontDb, t: &TextObject, opts: &LayoutOptions) -> TextLay
         _ => QUARTER_TURN,
     };
     match &t.kind {
-        TextKind::Point => flow(&mut cx, &paras, &t.para, None),
+        TextKind::Point => flow(&mut cx, &paras, t, None),
         TextKind::Area { frame } => {
             let to_lines = line_xf.inverse();
             let wrap: Vec<vectorcraft_doc::WrapShape> = if vertical {
@@ -185,7 +185,7 @@ pub fn layout_with(db: &FontDb, t: &TextObject, opts: &LayoutOptions) -> TextLay
             };
             let regions = Region::cells(&(to_lines * frame.to_bezpath()), opts, &wrap);
             cx.out.frames = regions.iter().map(|r| line_xf.transform_rect_bbox(r.cell)).collect();
-            flow(&mut cx, &paras, &t.para, Some(&regions));
+            flow(&mut cx, &paras, t, Some(&regions));
         }
         TextKind::OnPath { path, .. } => on_path(&mut cx, &paras, t, path),
     }
@@ -953,7 +953,9 @@ fn compose_para(cx: &Ctx<'_>, sg: &[SGlyph], para: &ParaStyle, pen: &Pen<'_>) ->
     compose(sg, &width, &cands, justify_last, 1.0).or_else(|| compose(sg, &width, &cands, justify_last, 4.0))
 }
 
-fn flow(cx: &mut Ctx<'_>, paras: &[Range<usize>], para: &ParaStyle, regions: Option<&[Region]>) {
+/// Flow paragraphs `paras` (byte ranges) of `t`, each with its own paragraph attributes
+/// (alignment, indents, spacing, direction, mojikumi, leading model…).
+fn flow(cx: &mut Ctx<'_>, paras: &[Range<usize>], t: &TextObject, regions: Option<&[Region]>) {
     let mut pen = Pen {
         regions,
         ri: 0,
@@ -962,10 +964,14 @@ fn flow(cx: &mut Ctx<'_>, paras: &[Range<usize>], para: &ParaStyle, regions: Opt
         fb: cx.opts.first_baseline,
         fb_min: cx.opts.first_baseline_min,
         queued: vec![],
-        model: para.leading_model,
+        model: t.para_at(0).leading_model,
         next_top: None,
     };
     'paras: for (pi, pr) in paras.iter().enumerate() {
+        let para = t.para_at(pi);
+        // The leading model is a paragraph attribute: this paragraph's lines (and the space to
+        // its first line) follow its own.
+        pen.model = para.leading_model;
         let text = cx.text;
         let bidi = para_bidi(text.get(pr.clone()).unwrap_or_default(), para.direction);
         let rtl = is_rtl(bidi.as_ref());
@@ -1229,7 +1235,8 @@ fn path_steps(ap: &ArcPath, glyphs: &[SGlyph], from: f64, spacing: f64) -> Vec<f
 /// Lay type on a path out along `path` (text space), between its brackets.
 fn on_path(cx: &mut Ctx<'_>, paras: &[Range<usize>], t: &TextObject, path: &PathData) {
     cx.out.on_path = true;
-    let para = &t.para;
+    // Type on a path is one line: the first paragraph's attributes align it.
+    let para = t.para_at(0);
     let mut sg = Vec::new();
     // The first paragraph's direction aligns the line (Auto) and sets the caret's.
     let mut rtl = None;
