@@ -9,7 +9,8 @@ use unicode_script::{Script, UnicodeScript};
 use harfrust::{Direction, Feature, ShapeOptions, UnicodeBuffer};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-use vectorcraft_doc::CharStyle;
+use vectorcraft_doc::text::INLINE_CHAR;
+use vectorcraft_doc::{CharStyle, InlineArt};
 
 use crate::features::OtFeatures;
 use crate::fontdb::{FontDb, FontFace};
@@ -50,6 +51,19 @@ pub(crate) struct SGlyph {
     pub lead: f64,
     /// Resolved Unicode bidi embedding level (logical source order).
     pub level: Level,
+    /// An inline graphic ([`vectorcraft_doc::TextRun::inline`]) standing in for a glyph.
+    pub inline: Option<InlineBox>,
+}
+
+/// Placement of an inline graphic's art, glyph space being points with the pen at the origin on
+/// the baseline (y down).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InlineBox {
+    /// The art's bounds in symbol space; `None` when the symbol is missing (the box only takes
+    /// up room).
+    pub art: Option<kurbo::Rect>,
+    /// Art -> glyph space.
+    pub xf: kurbo::Affine,
 }
 
 /// A glyph's place in a tate-chu-yoko block: the block takes one em of the column, its glyphs side
@@ -68,7 +82,7 @@ pub(crate) struct Tcy {
 
 impl SGlyph {
     pub fn is_space(&self) -> bool {
-        matches!(self.ch, ' ' | '\t' | '\u{3000}' | '\u{2002}'..='\u{200B}')
+        self.inline.is_none() && matches!(self.ch, ' ' | '\t' | '\u{3000}' | '\u{2002}'..='\u{200B}')
     }
     /// A line may break after this glyph.
     pub fn break_after(&self) -> bool {
@@ -102,6 +116,7 @@ pub(crate) fn hyphen_glyph(g: &SGlyph) -> SGlyph {
     h.byte = g.byte + g.len;
     h.len = 0;
     h.ch = '-';
+    h.inline = None;
     h
 }
 
@@ -184,14 +199,17 @@ pub(crate) fn cap_x_heights(db: &FontDb, st: &CharStyle) -> (f64, f64) {
     (face.cap_height * k, face.x_height * k)
 }
 
-/// Shape `text[range]`, where `runs` gives each run's byte range in `text` and style, and `levels`
-/// each byte's bidi embedding level from `range.start` (empty: all left to right). Glyphs come out
-/// in logical order, right-to-left ones shaped right to left.
+/// Shape `text[range]`, where `runs` gives each run's byte range in `text` and style, `inlines`
+/// (parallel to `runs`) the inline graphic of each run that is one, and `levels` each byte's bidi
+/// embedding level from `range.start` (empty: all left to right). Glyphs come out in logical
+/// order, right-to-left ones shaped right to left.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn shape_range(
     db: &FontDb,
     text: &str,
     range: Range<usize>,
     runs: &[(Range<usize>, &CharStyle)],
+    inlines: &[Option<&InlineArt>],
     feats: &OtFeatures,
     levels: &[Level],
     out: &mut Vec<SGlyph>,
@@ -202,6 +220,12 @@ pub(crate) fn shape_range(
         let a = rr.start.max(range.start);
         let b = rr.end.min(range.end);
         if a >= b {
+            continue;
+        }
+        if let Some(Some(art)) = inlines.get(ri) {
+            if let Some(face) = db.face(&st.font_family, &st.font_style).or_else(|| db.face_covering('a')) {
+                out.push(inline_glyph(&face, st, art, ri, a..b, text, level_at(a)));
+            }
             continue;
         }
         let Some(primary) = db.face(&st.font_family, &st.font_style) else { continue };
@@ -261,6 +285,62 @@ fn shaping_script(c: char) -> Script {
     match c.script() {
         Script::Hiragana | Script::Katakana | Script::Bopomofo => Script::Han,
         s => s,
+    }
+}
+
+/// The synthetic glyph of an inline graphic run (`range` = its one character).
+///
+/// The art is scaled uniformly to `scale` x the font size tall, its left edge on the pen and its
+/// vertical centre on the middle of the cap height raised by the inline's shift (see
+/// [`InlineArt`]). Its advance is the scaled art width plus tracking; the glyph's ascent and
+/// descent grow to the art's extent so a tall graphic opens up its line. A missing symbol takes a
+/// square of the same height and draws nothing.
+fn inline_glyph(face: &Arc<FontFace>, st: &CharStyle, art: &InlineArt, run: usize, range: Range<usize>, text: &str, level: Level) -> SGlyph {
+    let size = if st.size.is_finite() { st.size.max(0.0) } else { 0.0 };
+    let vs = if st.v_scale.is_finite() { st.v_scale / 100.0 } else { 1.0 };
+    let km = size / face.upem;
+    let (ascent, descent, cap, xh) = (face.ascent * km * vs, face.descent * km * vs, face.cap_height * km * vs, face.x_height * km * vs);
+    let h = art.safe_scale() * size;
+    let mid = cap * 0.5 + art.safe_shift();
+    let art_bounds = art.bounds.filter(|b| b.height() > 1e-9 && b.width().is_finite() && b.height().is_finite());
+    let (xf, width, drawn) = match art_bounds {
+        Some(b) if h > 0.0 => {
+            let k = h / b.height();
+            let xf = kurbo::Affine::translate((0.0, -mid)) * kurbo::Affine::scale(k) * kurbo::Affine::translate((-b.x0, -(b.y0 + b.y1) * 0.5));
+            (xf, b.width() * k, Some(b))
+        }
+        _ => (kurbo::Affine::IDENTITY, h, None),
+    };
+    let tracking = st.tracking / 1000.0 * size;
+    let adv = width + if tracking.is_finite() { tracking } else { 0.0 };
+    SGlyph {
+        face: face.clone(),
+        gid: 0,
+        byte: range.start,
+        len: range.len().max(1),
+        run,
+        adv: if adv.is_finite() { adv } else { 0.0 },
+        dx: 0.0,
+        dy: 0.0,
+        // Not used to draw (the art has its own transform), but they make the glyph's em box
+        // its run's em: Character Alignment and Top-to-Top leading treat an inline graphic as a
+        // character of its run's size, whatever its scale (see `layout::glyph_em`).
+        sx: if km.is_finite() { km * vs } else { 0.0 },
+        sy: if km.is_finite() { km * vs } else { 0.0 },
+        bshift: if st.baseline_shift.is_finite() { st.baseline_shift } else { 0.0 },
+        rotation: 0.0,
+        ascent: ascent.max(mid + h * 0.5),
+        descent: descent.max(h * 0.5 - mid),
+        leading: st.effective_leading(),
+        cap,
+        xh,
+        ch: text.get(range.clone()).and_then(|s| s.chars().next()).unwrap_or(INLINE_CHAR),
+        tcy: None,
+        lead: 0.0,
+        // U+FFFC is a bidi neutral (ON): its level, resolved from its neighbours, places it in
+        // RTL text like any other glyph once the line is reordered.
+        level,
+        inline: Some(InlineBox { art: drawn, xf }),
     }
 }
 
@@ -380,6 +460,7 @@ fn shape_segment(text: &str, seg: &Segment, feats: &OtFeatures, out: &mut Vec<SG
             tcy: None,
             lead: 0.0,
             level: *level,
+            inline: None,
         });
     }
 }

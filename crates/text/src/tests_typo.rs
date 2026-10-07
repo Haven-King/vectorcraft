@@ -15,7 +15,7 @@ fn style(size: f64) -> CharStyle {
 }
 
 fn run(text: &str, size: f64) -> TextRun {
-    TextRun { text: text.into(), style: style(size) }
+    TextRun { text: text.into(), style: style(size), inline: None }
 }
 
 fn area_path(text: &str, st: CharStyle, frame: &BezPath, justify: Justify) -> TextObject {

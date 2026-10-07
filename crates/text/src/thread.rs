@@ -47,10 +47,10 @@ pub fn distribute(db: &FontDb, frames: &[&TextObject], runs: &[TextRun]) -> Vec<
         let n = if i + 1 == frames.len() { len } else { fit(db, f, &rest) };
         let mut head = slice_runs(&rest, 0, n);
         if head.is_empty() {
-            head.push(TextRun { text: String::new(), style: style_at(&rest, n) });
+            head.push(TextRun { text: String::new(), style: style_at(&rest, n), inline: None });
         }
         let tail = slice_runs(&rest, n, len);
-        rest = if tail.is_empty() { vec![TextRun { text: String::new(), style: style_at(&rest, len) }] } else { tail };
+        rest = if tail.is_empty() { vec![TextRun { text: String::new(), style: style_at(&rest, len), inline: None }] } else { tail };
         out.push(head);
     }
     out
@@ -74,7 +74,7 @@ mod tests {
         let db = FontDb::global();
         let (a, b, c) = (frame(0.0), frame(200.0), frame(400.0));
         let text = "The quick brown fox jumps over the lazy dog. ".repeat(6) + "\nSecond paragraph here.";
-        let story = vec![TextRun { text: text.clone(), style: CharStyle::default() }];
+        let story = vec![TextRun { text: text.clone(), style: CharStyle::default(), inline: None }];
         let parts = distribute(db, &[&a, &b, &c], &story);
         let lens: Vec<usize> = parts.iter().map(|p| runs_len(p)).collect();
         assert!(lens[0] > 0 && lens[1] > 0, "{lens:?}");
@@ -95,7 +95,7 @@ mod tests {
         let db = FontDb::global();
         let (a, b) = (frame(0.0), frame(200.0));
         let st = CharStyle { size: 20.0, ..Default::default() };
-        let parts = distribute(db, &[&a, &b], &[TextRun { text: "Hi".into(), style: st }]);
+        let parts = distribute(db, &[&a, &b], &[TextRun { text: "Hi".into(), style: st, inline: None }]);
         assert_eq!(parts[0][0].text, "Hi");
         assert_eq!((parts[1][0].text.as_str(), parts[1][0].style.size), ("", 20.0));
     }

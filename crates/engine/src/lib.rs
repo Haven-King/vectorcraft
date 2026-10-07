@@ -908,6 +908,8 @@ impl Session {
     /// Text layout bounds are a cache (not saved): compute them for a document just read, or
     /// selection boxes and hit testing would use the rough estimate until each text is edited.
     fn refresh_text_bounds(doc: &mut Document) {
+        // Inline graphics in text take their size from their symbols' art (not saved either).
+        doc.resolve_inline_art();
         let mut texts = vec![];
         doc.walk(|n| {
             if matches!(n.kind, NodeKind::Text(_)) {
@@ -1101,6 +1103,8 @@ impl Session {
         let doc = Arc::make_mut(&mut st.doc);
         let result = match f(doc, &mut st.selection) {
             Ok(v) => {
+                // Inline graphics in text follow their symbols.
+                cmd::inline::refresh(&before, Arc::make_mut(&mut st.doc));
                 // Text Wrap: area type follows its wrap objects; then threads re-flow.
                 cmd::textwrap::refresh(Arc::make_mut(&mut st.doc));
                 // Opacity-mask editing: the mask follows its art on the editing layer.
@@ -1382,6 +1386,8 @@ mod tests_gradient;
 mod tests_gradpanel;
 #[cfg(test)]
 mod tests_halftone;
+#[cfg(test)]
+mod tests_inline;
 #[cfg(test)]
 mod tests_journal;
 #[cfg(test)]
