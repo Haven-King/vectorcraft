@@ -765,10 +765,8 @@ impl Interp<'_> {
             let (x, y) = (i % w, i / w);
             // The mask's pixel over this one (in 64 bits: rows times rows overflow 32).
             let at = (y as u64 * mh as u64 / h.max(1) as u64) * mw as u64 + x as u64 * mw as u64 / w.max(1) as u64;
-            if usize::try_from(at * 4).ok().and_then(|i| m.rgba.get(i)).is_none_or(|v| *v >= 128)
-                && let Some(a) = px.get_mut(3)
-            {
-                *a = 0;
+            if usize::try_from(at * 4).ok().and_then(|i| m.rgba.get(i)).is_none_or(|v| *v >= 128) {
+                px[3] = 0;
             }
         }
         Ok(Some(img))
