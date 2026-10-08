@@ -671,7 +671,16 @@ pub struct AreaOptions {
 
 impl Default for AreaOptions {
     fn default() -> Self {
-        Self { rows: 1, columns: 1, gutter: 18.0, inset: 0.0, first_baseline: FirstBaseline::Ascent, first_baseline_min: 0.0, vertical_align: VerticalAlign::Top, fit: AreaFit::None }
+        Self {
+            rows: 1,
+            columns: 1,
+            gutter: 18.0,
+            inset: 0.0,
+            first_baseline: FirstBaseline::Ascent,
+            first_baseline_min: 0.0,
+            vertical_align: VerticalAlign::Top,
+            fit: AreaFit::None,
+        }
     }
 }
 

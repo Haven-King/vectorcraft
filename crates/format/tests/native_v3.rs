@@ -50,21 +50,24 @@ fn area_type_vertical_alignment_round_trips() {
     assert!(text.contains("\"verticalAlign\":\"center\""), "the fixture's area type is centred");
     let back = load(text.as_bytes()).unwrap();
     assert_eq!(doc_json(&back), doc_json(&d));
+    // The fixture has other area type too: the one with an alignment is the centred one.
     let area = |d: &Document| {
-        let mut found = None;
+        let mut found = vectorcraft_doc::VerticalAlign::Top;
         d.walk(|n| {
             if let NodeKind::Text(t) = &n.kind
                 && matches!(t.kind, vectorcraft_doc::TextKind::Area { .. })
+                && t.area.vertical_align != vectorcraft_doc::VerticalAlign::Top
             {
-                found = Some(t.area.vertical_align);
+                found = t.area.vertical_align;
             }
         });
-        found.unwrap()
+        found
     };
     assert_eq!(area(&back), vectorcraft_doc::VerticalAlign::Center);
     // Files from before the option open top-aligned.
     let old = text.replacen("\"verticalAlign\":\"center\",", "", 1).replacen(",\"verticalAlign\":\"center\"", "", 1);
-    assert!(!old.contains("verticalAlign"));
+    // (Other area type in the fixture writes its default alignment; the centred one lost its key.)
+    assert!(!old.contains("\"verticalAlign\":\"center\""));
     assert_eq!(area(&load(old.as_bytes()).unwrap()), vectorcraft_doc::VerticalAlign::Top);
 }
 
@@ -149,10 +152,13 @@ fn text_composer_round_trips() {
         });
         v
     };
-    assert_eq!(composers(&d), [Composer::SingleLine]);
+    // One text object of the fixture uses the Single-line Composer; the others the default.
+    let single = |v: &[Composer]| v.iter().filter(|c| **c == Composer::SingleLine).count();
+    let before = composers(&d);
+    assert_eq!(single(&before), 1);
     let bytes = save(&d, false);
     assert!(String::from_utf8_lossy(&bytes).contains("\"composer\":\"singleLine\""));
-    assert_eq!(composers(&load(&bytes).unwrap()), [Composer::SingleLine]);
+    assert_eq!(composers(&load(&bytes).unwrap()), before);
     // Files without the key (older files, Every-line text) read as Every-line.
     fn strip(v: &mut Value) {
         match v {
@@ -167,7 +173,9 @@ fn text_composer_round_trips() {
     let mut v = json_of(&bytes);
     strip(&mut v);
     let d2 = load(&serde_json::to_vec(&v).unwrap()).unwrap();
-    assert_eq!(composers(&d2), [Composer::EveryLine]);
+    let after = composers(&d2);
+    assert_eq!(after.len(), before.len());
+    assert!(after.iter().all(|c| *c == Composer::EveryLine));
     assert!(!String::from_utf8_lossy(&save(&d2, false)).contains("composer"));
 }
 
