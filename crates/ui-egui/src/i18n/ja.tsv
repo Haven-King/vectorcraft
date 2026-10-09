@@ -3342,7 +3342,6 @@ theme	Appearance	外観
 @msg	select a clip group	クリップグループを選択してください
 @msg	select two or more objects to distribute	分布させるオブジェクトを 2 つ以上選択してください
 @msg	selection has no bounds	選択範囲に境界がありません
-@msg	the top object must be a path, compound path or text object to use as a clipping mask	クリッピングマスクとして使うには、最前面のオブジェクトがパス、複合パス、テキストオブジェクトのいずれかである必要があります
 @msg	no target object has an opacity mask: select one or give `id`	不透明マスクのあるターゲットオブジェクトがありません: 該当するオブジェクトを選択するか、`id` を指定してください
 @msg	the object already has an opacity mask	オブジェクトにはすでに不透明マスクがあります
 @msg	`{name}` is a process colour: tints apply to global and spot colours	`{name}` はプロセスカラーです: 濃淡を適用できるのはグローバルカラーと特色だけです
@@ -3722,3 +3721,9 @@ theme	Appearance	外観
 @msg	no user workspace `{from}`	ユーザーワークスペース `{from}` が見つかりません
 @msg	unknown workspace (one of {_1})	不明なワークスペースです ({_1} のいずれかを指定してください)
 @msg	workspace name can't be empty	ワークスペース名を入力してください
+@msg	Expand Compound Shape: the compound shape is empty	複合シェイプを拡張: 複合シェイプが空です
+@msg	Make Compound Shape: select two or more objects	複合シェイプを作成: 2 つ以上のオブジェクトを選択してください
+@msg	compound shapes can only contain paths, compound paths, groups, type, compound shapes and live objects	複合シェイプに含められるのは、パス、複合パス、グループ、テキスト、複合シェイプ、ライブオブジェクトのみです
+@msg	select a compound shape	複合シェイプを選択してください
+@msg	select members of a compound shape	複合シェイプのメンバーを選択してください
+@msg	the top object must be a path, compound path, compound shape or text object to use as a clipping mask	クリッピングマスクとして使うには、最前面のオブジェクトがパス、複合パス、複合シェイプ、またはテキストオブジェクトである必要があります
