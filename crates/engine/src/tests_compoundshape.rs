@@ -318,6 +318,64 @@ fn a_compound_shape_clips_by_its_outline() {
     assert!((b.x0 - 50.0).abs() < 1e-6 && (b.x1 - 100.0).abs() < 1e-6, "{b:?}");
 }
 
+/// Regression: in isolation a subtracted member could only be clicked on the compound's outline
+/// where it ran along the member; elsewhere (outside the filled part, or in the hole it cuts) the
+/// click hit the background. Isolated, members are objects of their own.
+#[test]
+fn an_isolated_compound_shapes_members_click_drag_and_resize_anywhere_in_them() {
+    use vectorcraft_tools::{PointerEvent, PointerKind};
+    let v = crate::tooling::ViewInfo { smart_guides: false, ..Default::default() };
+    let mut s = session();
+    // A filled square with a square subtracted over its top-left corner (an L shape).
+    let a = rect(&mut s, 100.0, 100.0, 200.0, 200.0);
+    let b = rect(&mut s, 0.0, 0.0, 150.0, 150.0);
+    s.execute("select.set", &json!({"ids": [a.0, b.0]})).unwrap();
+    let c = make(&mut s, "subtract");
+    s.select_tool("selection", v).unwrap();
+    let press = |s: &mut Session, kind, x, y| {
+        s.pointer(&PointerEvent::new(kind, x, y), v).unwrap();
+    };
+    let click = |s: &mut Session, x, y| {
+        press(s, PointerKind::Down, x, y);
+        press(s, PointerKind::Up, x, y);
+    };
+    // 1–2. Select the compound shape, double-click it: isolation.
+    click(&mut s, 250.0, 250.0);
+    assert_eq!(s.doc().unwrap().selection.objects, vec![c]);
+    press(&mut s, PointerKind::DoubleClick, 250.0, 250.0);
+    assert_eq!(s.doc().unwrap().isolation, Some(c), "double-click isolates the compound shape");
+    // 3. The subtracted member: outside the filled part, and inside the hole it cuts.
+    for (x, y) in [(40.0, 40.0), (125.0, 125.0)] {
+        s.execute("select.none", &json!({})).unwrap();
+        click(&mut s, x, y);
+        assert_eq!(s.doc().unwrap().selection.objects, vec![b], "a click at ({x}, {y}) picks the subtracted member");
+    }
+    // The filled member where it shows.
+    click(&mut s, 250.0, 250.0);
+    assert_eq!(s.doc().unwrap().selection.objects, vec![a]);
+    // 4. Drag the subtracted member from inside the hole…
+    click(&mut s, 125.0, 125.0);
+    press(&mut s, PointerKind::Down, 125.0, 125.0);
+    for x in [130.0, 135.0] {
+        press(&mut s, PointerKind::Drag, x, 125.0);
+    }
+    press(&mut s, PointerKind::Up, 135.0, 125.0);
+    assert!((node(&s, a).geometric_bounds().unwrap().x0 - 100.0).abs() < 1e-6, "the filled member stays");
+    let bb = node(&s, b).geometric_bounds().unwrap();
+    assert!((bb.x0 - 10.0).abs() < 1e-6 && (bb.x1 - 160.0).abs() < 1e-6, "moved: {bb:?}");
+    // …and resize it by its top-left handle (outside the filled part).
+    press(&mut s, PointerKind::Down, 10.0, 0.0);
+    for x in [0.0, -10.0] {
+        press(&mut s, PointerKind::Drag, x, -20.0);
+    }
+    press(&mut s, PointerKind::Up, -10.0, -20.0);
+    let bb = node(&s, b).geometric_bounds().unwrap();
+    assert!((bb.x0 + 10.0).abs() < 1e-6 && (bb.y0 + 20.0).abs() < 1e-6 && (bb.x1 - 160.0).abs() < 1e-6, "resized: {bb:?}");
+    assert_eq!(s.doc().unwrap().selection.objects, vec![b]);
+    // The outline follows: the L's notch grew with the member.
+    assert!((area(&outline(&s, c)) - (40000.0 - 60.0 * 50.0)).abs() < 1.0);
+}
+
 /// Regression: a selected subtracted member is a hole in the outline, so a press inside it hit the
 /// background, dropped the selection and moved nothing.
 #[test]

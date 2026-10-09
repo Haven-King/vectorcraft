@@ -69,20 +69,21 @@ pub fn hit_test(doc: &Document, p: Point, opt: HitOptions) -> Option<Hit> {
     hit_test_skipping(doc, p, opt, &|_| false)
 }
 
-/// The topmost of the `selected` objects that is a compound-shape member with `p` inside its own
-/// region or on its outline, even where it is a hole in the compound's outline (a subtracted
-/// member): a selected member is pressed and dragged from anywhere in it, as a plain object is.
+/// A selected compound-shape member that is the topmost member of its compound shape with `p`
+/// inside its own region or on its outline, even where it is a hole in the compound's outline (a
+/// subtracted member): a selected member is pressed and dragged from anywhere in it, as a plain
+/// object is. A member above it there takes the press instead (it isn't this one's to drag).
 /// Hidden or locked members, or ones inside a hidden or locked container, don't count.
 pub fn selected_member_at(doc: &Document, p: Point, opt: HitOptions, selected: &[NodeId]) -> Option<Hit> {
     doc.paint_order(selected.iter().copied()).into_iter().rev().find_map(|id| {
         let parent = doc.node(doc.parent_of(id)?)?;
-        if !matches!(parent.kind, NodeKind::CompoundShape { .. }) {
+        let NodeKind::CompoundShape { children } = &parent.kind else { return None };
+        // The topmost visible member there must be this one.
+        let top = children.iter().rev().find(|m| m.visible && member_at(m, p, opt.tol))?;
+        if top.id != id {
             return None;
         }
-        let m = doc.node(id)?;
-        if !member_at(m, p, opt.tol) {
-            return None;
-        }
+        let m = &**top;
         let ancestry = doc.ancestry(id)?;
         if ancestry.iter().any(|a| doc.node(*a).is_none_or(|n| !n.visible || n.locked || n.is_template())) {
             return None;
@@ -171,6 +172,7 @@ fn hit_children(parent: &Node, p: Point, opt: HitOptions, skip: &dyn Fn(NodeId) 
         }
         // (An envelope's content sits where it was, not where the envelope draws it.)
         if !(edits_contents(c)
+            || isolated_in(c, opt.scope)
             || c.shaper.is_some() && c.children().and_then(|children| children.first()).is_some_and(|source| Some(source.id) == opt.scope))
             && let Some(b) = c.reach_bounds()
             && !b.inflate(opt.tol, opt.tol).contains(p)
@@ -189,20 +191,33 @@ fn hit_children(parent: &Node, p: Point, opt: HitOptions, skip: &dyn Fn(NodeId) 
             NodeKind::Blend { .. } => hit_children(c, p, opt, skip, chain)
                 .or_else(|| hit_leaf(c, p, opt).map(|kind| Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 })),
             // A compound shape hits on its outline: then the member under the point, for Direct
-            // and Group Selection (the Selection tool takes the compound shape).
-            NodeKind::CompoundShape { children } => compound_shape_hit(c, p, opt).map(|kind| {
-                let member = children.iter().rev().find(|m| m.visible && !m.locked && !skip(m.id) && member_at(m, p, opt.tol));
-                match member {
-                    Some(m) => {
-                        chain.push(m.id);
-                        let inner = if m.is_container() { hit_children(m, p, opt, skip, chain) } else { None };
-                        let hit = inner.unwrap_or_else(|| Hit { leaf: m.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 });
-                        chain.pop();
-                        hit
-                    }
-                    None => Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 },
-                }
-            }),
+            // and Group Selection (the Selection tool takes the compound shape). Isolated (or
+            // with something inside it isolated), its members are objects of their own: each hits
+            // anywhere in its own shape, whatever its mode (a subtracted one where it cuts away).
+            NodeKind::CompoundShape { children } => {
+                let isolated = isolated_in(c, opt.scope);
+                let kind = if isolated {
+                    children.iter().any(|m| m.visible && member_at(m, p, opt.tol)).then_some(HitKind::Fill)
+                } else {
+                    compound_shape_hit(c, p, opt)
+                };
+                kind.and_then(|kind| {
+                    let member = children.iter().rev().find(|m| m.visible && !m.locked && !skip(m.id) && member_at(m, p, opt.tol));
+                    let hit = match member {
+                        Some(m) => {
+                            chain.push(m.id);
+                            let inner = if m.is_container() { hit_children(m, p, opt, skip, chain) } else { None };
+                            let hit = inner.unwrap_or_else(|| Hit { leaf: m.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 });
+                            chain.pop();
+                            hit
+                        }
+                        // Isolated, only a member is something to pick.
+                        None if isolated => return None,
+                        None => Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 },
+                    };
+                    Some(hit)
+                })
+            }
             _ => hit_leaf(c, p, opt).map(|kind| Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 }),
         };
         if hit.is_some() {
@@ -211,6 +226,14 @@ fn hit_children(parent: &Node, p: Point, opt: HitOptions, skip: &dyn Fn(NodeId) 
         chain.pop();
     }
     None
+}
+
+/// Is `scope` (the isolated container) `n` or inside it?
+fn isolated_in(n: &Node, scope: Option<NodeId>) -> bool {
+    let Some(s) = scope else { return false };
+    let mut found = false;
+    n.walk(&mut |c| found |= c.id == s);
+    found
 }
 
 /// Is `p` inside member `m` of a compound shape (its region, whatever it paints)?
