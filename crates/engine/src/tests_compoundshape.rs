@@ -318,6 +318,33 @@ fn a_compound_shape_clips_by_its_outline() {
     assert!((b.x0 - 50.0).abs() < 1e-6 && (b.x1 - 100.0).abs() < 1e-6, "{b:?}");
 }
 
+/// Regression: a selected subtracted member is a hole in the outline, so a press inside it hit the
+/// background, dropped the selection and moved nothing.
+#[test]
+fn a_selected_member_drags_from_inside_its_hole() {
+    use vectorcraft_tools::{PointerEvent, PointerKind};
+    let v = crate::tooling::ViewInfo { smart_guides: false, ..Default::default() };
+    // (Group Selection adds the compound shape when its selected member is pressed, as with groups.)
+    for tool in ["selection", "directSelection"] {
+        let mut s = session();
+        let a = rect(&mut s, 0.0, 0.0, 100.0, 100.0);
+        let b = rect(&mut s, 25.0, 25.0, 50.0, 50.0);
+        s.execute("select.set", &json!({"ids": [a.0, b.0]})).unwrap();
+        make(&mut s, "subtract");
+        s.execute("select.set", &json!({"ids": [b.0]})).unwrap();
+        s.select_tool(tool, v).unwrap();
+        s.pointer(&PointerEvent::new(PointerKind::Down, 50.0, 50.0), v).unwrap();
+        for x in [55.0, 60.0] {
+            s.pointer(&PointerEvent::new(PointerKind::Drag, x, 50.0), v).unwrap();
+        }
+        s.pointer(&PointerEvent::new(PointerKind::Up, 60.0, 50.0), v).unwrap();
+        assert_eq!(s.doc().unwrap().selection.objects, vec![b], "{tool}: the member stays selected");
+        let bb = node(&s, b).geometric_bounds().unwrap();
+        assert!((bb.x0 - 35.0).abs() < 1e-6, "{tool}: the member moved: {bb:?}");
+        assert!((node(&s, a).geometric_bounds().unwrap().x0).abs() < 1e-6, "{tool}: the other member stayed");
+    }
+}
+
 #[test]
 fn layers_drags_add_and_remove_members() {
     let mut s = session();

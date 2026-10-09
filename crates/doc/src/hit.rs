@@ -69,6 +69,30 @@ pub fn hit_test(doc: &Document, p: Point, opt: HitOptions) -> Option<Hit> {
     hit_test_skipping(doc, p, opt, &|_| false)
 }
 
+/// The topmost of the `selected` objects that is a compound-shape member with `p` inside its own
+/// region or on its outline, even where it is a hole in the compound's outline (a subtracted
+/// member): a selected member is pressed and dragged from anywhere in it, as a plain object is.
+/// Hidden or locked members, or ones inside a hidden or locked container, don't count.
+pub fn selected_member_at(doc: &Document, p: Point, opt: HitOptions, selected: &[NodeId]) -> Option<Hit> {
+    doc.paint_order(selected.iter().copied()).into_iter().rev().find_map(|id| {
+        let parent = doc.node(doc.parent_of(id)?)?;
+        if !matches!(parent.kind, NodeKind::CompoundShape { .. }) {
+            return None;
+        }
+        let m = doc.node(id)?;
+        if !member_at(m, p, opt.tol) {
+            return None;
+        }
+        let ancestry = doc.ancestry(id)?;
+        if ancestry.iter().any(|a| doc.node(*a).is_none_or(|n| !n.visible || n.locked || n.is_template())) {
+            return None;
+        }
+        let layers = ancestry.iter().take_while(|a| doc.node(**a).is_some_and(Node::is_layer)).count();
+        let kind = if member_edge(m, p, opt.tol) { HitKind::Outline } else { HitKind::Fill };
+        Some(Hit { leaf: id, ancestry, kind, contents_of: None, layers })
+    })
+}
+
 /// The objects under `p` that [`Hit::top_object`] picks in `scope` (isolation mode), topmost
 /// first: what clicks there select, one below the other (Cmd/Ctrl-click selects behind).
 pub fn objects_at(doc: &Document, p: Point, opt: HitOptions, scope: Option<NodeId>) -> Vec<NodeId> {
