@@ -164,6 +164,21 @@ fn hit_children(parent: &Node, p: Point, opt: HitOptions, skip: &dyn Fn(NodeId) 
             // as the blend.
             NodeKind::Blend { .. } => hit_children(c, p, opt, skip, chain)
                 .or_else(|| hit_leaf(c, p, opt).map(|kind| Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 })),
+            // A compound shape hits on its outline: then the member under the point, for Direct
+            // and Group Selection (the Selection tool takes the compound shape).
+            NodeKind::CompoundShape { children } => compound_shape_hit(c, p, opt).map(|kind| {
+                let member = children.iter().rev().find(|m| m.visible && !m.locked && !skip(m.id) && member_at(m, p, opt.tol));
+                match member {
+                    Some(m) => {
+                        chain.push(m.id);
+                        let inner = if m.is_container() { hit_children(m, p, opt, skip, chain) } else { None };
+                        let hit = inner.unwrap_or_else(|| Hit { leaf: m.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 });
+                        chain.pop();
+                        hit
+                    }
+                    None => Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 },
+                }
+            }),
             _ => hit_leaf(c, p, opt).map(|kind| Hit { leaf: c.id, ancestry: chain.clone(), kind, contents_of: None, layers: 1 }),
         };
         if hit.is_some() {
@@ -172,6 +187,57 @@ fn hit_children(parent: &Node, p: Point, opt: HitOptions, skip: &dyn Fn(NodeId) 
         chain.pop();
     }
     None
+}
+
+/// Is `p` inside member `m` of a compound shape (its region, whatever it paints)?
+fn member_inside(m: &Node, p: Point) -> bool {
+    if !m.visible {
+        return false;
+    }
+    match &m.kind {
+        NodeKind::Path { guide: true, .. } => false,
+        NodeKind::Path { path, rule, .. } => fill_contains(&path.to_bezpath(), *rule, p),
+        NodeKind::Compound { rule, .. } => m.stroke_path().is_some_and(|bp| fill_contains(&bp, *rule, p)),
+        NodeKind::CompoundShape { children } => compound_inside(children, p),
+        NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } => match m.clips() {
+            true => children.first().is_some_and(|c| member_inside(c, p)),
+            false => children.iter().any(|c| member_inside(c, p)),
+        },
+        _ => m.geometric_bounds().is_some_and(|b| b.contains(p)),
+    }
+}
+
+/// Is `p` within `tol` of the outline of member `m`?
+fn member_edge(m: &Node, p: Point, tol: f64) -> bool {
+    if !m.visible {
+        return false;
+    }
+    match &m.kind {
+        NodeKind::Path { .. } | NodeKind::Compound { .. } => m.stroke_path().is_some_and(|bp| stroke_contains(&bp, 0.0, tol, p)),
+        _ => m.children().is_some_and(|ch| ch.iter().any(|c| member_edge(c, p, tol))),
+    }
+}
+
+/// Is `p` inside or on member `m`?
+fn member_at(m: &Node, p: Point, tol: f64) -> bool {
+    member_inside(m, p) || member_edge(m, p, tol)
+}
+
+/// Is `p` inside the outline of a compound shape with these members (their modes folded)?
+fn compound_inside(children: &[std::sync::Arc<Node>], p: Point) -> bool {
+    let (inside, modes): (Vec<bool>, Vec<crate::ShapeMode>) =
+        children.iter().filter(|m| m.visible).map(|m| (member_inside(m, p), m.shape_mode)).unzip();
+    crate::ShapeMode::fold(&inside, &modes)
+}
+
+/// A click on compound shape `n`: inside its outline (unless only outlines hit), or on one of its
+/// members' outlines (where its own outline and stroke run, or the members show in outline mode).
+fn compound_shape_hit(n: &Node, p: Point, opt: HitOptions) -> Option<HitKind> {
+    let NodeKind::CompoundShape { children } = &n.kind else { return None };
+    if children.iter().any(|m| member_edge(m, p, opt.tol + n.appearance.outset())) {
+        return Some(HitKind::Outline);
+    }
+    (!opt.outline && !opt.path_only && compound_inside(children, p)).then_some(HitKind::Fill)
 }
 
 /// A click on the strokes of a path or compound path `n` along `bp`: what any visible stroke
@@ -216,6 +282,7 @@ fn hit_leaf(n: &Node, p: Point, opt: HitOptions) -> Option<HitKind> {
         | NodeKind::Blend { .. }
         | NodeKind::Envelope { .. } => n.geometric_bounds().filter(|b| b.inflate(opt.tol, opt.tol).contains(p)).map(|_| HitKind::Bounds),
         NodeKind::Repeat(r) => r.expand().iter().find_map(|g| hit_any(g, p, opt)),
+        NodeKind::CompoundShape { .. } => compound_shape_hit(n, p, opt),
         NodeKind::Mesh(m) => {
             let bp = m.outline().to_bezpath();
             if stroke_contains(&bp, 0.0, opt.tol, p) {
@@ -287,15 +354,17 @@ pub fn marquee(doc: &Document, r: Rect, scope: Option<NodeId>, leaves: bool) -> 
     fn touches(n: &Node, r: Rect) -> bool {
         match &n.kind {
             NodeKind::Path { path, .. } => vectorcraft_geom::hit::intersects_rect(path, r),
-            NodeKind::Layer { children, .. } | NodeKind::Group { children, .. } | NodeKind::Compound { children, .. } => {
-                children.iter().any(|c| c.visible && touches(c, r))
-            }
+            NodeKind::Layer { children, .. }
+            | NodeKind::Group { children, .. }
+            | NodeKind::Compound { children, .. }
+            | NodeKind::CompoundShape { children } => children.iter().any(|c| c.visible && touches(c, r)),
             _ => n.geometric_bounds().is_some_and(|b| b.intersect(r).area() > 0.0 || r.contains(b.origin())),
         }
     }
     fn collect_leaves(n: &Node, r: Rect, out: &mut Vec<NodeId>) {
         match &n.kind {
-            NodeKind::Layer { children, .. } | NodeKind::Group { children, .. } => {
+            // Direct Selection reaches a compound shape's members.
+            NodeKind::Layer { children, .. } | NodeKind::Group { children, .. } | NodeKind::CompoundShape { children } => {
                 for c in children {
                     if c.visible && !c.locked {
                         collect_leaves(c, r, out);

@@ -199,7 +199,11 @@ impl Tool for SelectionTool {
                 }
                 if let Some(h) = hit_test(cx.doc, p, cx.hit_options()) {
                     let top = h.top_object(cx.isolation);
-                    if cx.double_click_isolate && cx.doc.node(top).is_some_and(|n| matches!(n.kind, vectorcraft_doc::NodeKind::Group { .. })) {
+                    if cx.double_click_isolate
+                        && cx.doc.node(top).is_some_and(|n| {
+                            matches!(n.kind, vectorcraft_doc::NodeKind::Group { .. } | vectorcraft_doc::NodeKind::CompoundShape { .. })
+                        })
+                    {
                         return vec![Action::Exec("object.isolate".into(), json!({ "id": top.0 }))];
                     }
                     if cx.doc.node(top).is_some_and(|n| matches!(n.kind, vectorcraft_doc::NodeKind::Text(_))) {
