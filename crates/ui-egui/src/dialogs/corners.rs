@@ -42,7 +42,7 @@ pub fn open(app: &mut VectorcraftApp, p: &Value) -> Result<Value, String> {
         None => live.picked(st.selection.partial(id)),
     };
     if corners.is_empty() {
-        return Err("give corners of the path: anchors between two straight sides".into());
+        return Err("give corners of the path: corner anchors, not smooth ones or an open path's ends".into());
     }
     let (radius, kind) = live.style(&corners);
     let mut fields = json!({"id": id.0, "corners": corners});

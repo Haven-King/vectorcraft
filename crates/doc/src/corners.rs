@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use vectorcraft_geom::corners::{Corner, cut_corners, path_corners};
+use vectorcraft_geom::corners::{Corner, cut_sources, path_corners};
 use vectorcraft_geom::shapes::{self, CornerKind};
 use vectorcraft_geom::{Affine, PathData, Rect};
 
@@ -42,19 +42,9 @@ impl<'a> LiveCorners<'a> {
             Some(LiveShape::Path { base, radii, kinds }) => (Cow::Borrowed(base), Affine::IDENTITY, radii.clone(), kinds.clone()),
             Some(LiveShape::Ellipse { .. } | LiveShape::Line { .. }) => return None,
         };
-        let sources = if radii.iter().any(|r| *r > 0.0) {
-            cut_corners(&base, &radii, &kinds).1
-        } else {
-            let mut first = 0;
-            base.subpaths
-                .iter()
-                .map(|sp| {
-                    first += sp.anchors.len();
-                    (first - sp.anchors.len()..first).collect()
-                })
-                .collect()
-        };
-        Some(Self { corners: path_corners(&base), base, xf, radii, kinds, sources })
+        let corners = path_corners(&base);
+        let sources = cut_sources(&base, &corners, &radii);
+        Some(Self { corners, base, xf, radii, kinds, sources })
     }
 
     /// The Live Corners of a path object.
@@ -267,5 +257,35 @@ mod tests {
         assert_eq!(path.anchor_count(), 4);
         assert_eq!(path.subpaths[0].anchors[0].p, Point::new(0.0, 0.0));
         assert_eq!(path.subpaths[0].anchors[3].p, Point::new(100.0, 80.0));
+    }
+
+    /// A corner where a line meets a curve rounds too: the path keeps its uncut outline live, the
+    /// cut's anchors map back to their corner, and squaring it gives the path back exactly.
+    #[test]
+    fn a_corner_leaving_a_line_for_a_curve_rounds_and_comes_back() {
+        use vectorcraft_geom::{Anchor, AnchorKind};
+        let mut corner = Anchor::corner(Point::new(0.0, 0.0));
+        corner.h_out = Point::new(30.0, -30.0);
+        let mut end = Anchor::corner(Point::new(100.0, 0.0));
+        end.h_in = Point::new(70.0, -30.0);
+        let pen = PathData::single(SubPath::new(vec![Anchor::corner(Point::new(0.0, 100.0)), corner, end], false));
+        let c = LiveCorners::new(&pen, None).unwrap();
+        assert_eq!(c.all(), set(&[1]));
+        assert!(c.corner(1).is_some_and(|k| (k.angle_deg() - 135.0).abs() < 1e-9));
+        let (mut path, mut live) = (pen.clone(), None);
+        set_corners(&mut path, &mut live, &c.all(), Some(10.0), None);
+        assert!(matches!(&live, Some(LiveShape::Path { base, .. }) if *base == pen), "{live:?}");
+        assert_eq!(path.anchor_count(), 4);
+        let c = LiveCorners::new(&path, live.as_ref()).unwrap();
+        assert_eq!(c.sources(), [vec![0, 1, 1, 2]]);
+        assert_eq!(c.corners_of(&anchors(&[2])), set(&[1]));
+        assert_eq!(c.anchors_of(&set(&[1])), anchors(&[1, 2]));
+        assert_eq!(c.style(&set(&[1])), (Some(10.0), Some(CornerKind::Round)));
+        // The cut leaves the curve smoothly; the curve still ends where it did.
+        let sp = &path.subpaths[0];
+        assert_eq!(sp.anchors[2].kind, AnchorKind::Smooth);
+        assert_eq!((sp.anchors[0], sp.anchors[3].p), (pen.subpaths[0].anchors[0], Point::new(100.0, 0.0)));
+        set_corners(&mut path, &mut live, &set(&[1]), Some(0.0), None);
+        assert_eq!((path, live), (pen, None));
     }
 }

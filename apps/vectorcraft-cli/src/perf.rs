@@ -113,6 +113,51 @@ fn edit_drags(n: usize) -> Result<(f64, f64), String> {
     Ok((handle, segment))
 }
 
+/// Milliseconds to find the corner widgets of a 5,000-anchor zig-zag whose sides are all curves,
+/// selected on top of the synthetic `n`-path document (Direct Selection shows them every frame),
+/// and to round all its corners (`object.setLiveShape`, which a widget drag previews on every move).
+fn curved_corners(n: usize) -> Result<(f64, f64), String> {
+    use vectorcraft_engine::tools::corners::CornerWidgets;
+    use vectorcraft_geom::{Anchor, PathData, SubPath, Vec2};
+    let mut doc = synthetic(n)?;
+    let l = doc.layers.first().map(|l| l.id);
+    let id = doc.alloc_id();
+    // Anchors 4 pt apart, up and down by 20 pt, their handles leaning towards their neighbours:
+    // every anchor but the ends is a corner between two curves.
+    let anchor = |i: usize| {
+        let up = i.is_multiple_of(2);
+        let p = Point::new(i as f64 * 4.0, if up { 500.0 } else { 520.0 });
+        let dy = if up { 0.8 } else { -0.8 };
+        Anchor::with_handles(p, p + Vec2::new(-0.6, dy), p + Vec2::new(0.6, dy))
+    };
+    let path = PathData::single(SubPath::new((0..5000).map(anchor).collect(), false));
+    doc.insert(l, usize::MAX, Node::path(id, path, Appearance::default_art())).map_err(|e| e.to_string())?;
+    let mut s = vectorcraft_engine::Session::new();
+    s.add_document(doc, None);
+    let err = |e: vectorcraft_engine::EngineError| e.to_string();
+    s.execute("select.set", &json!({"ids": [id.0]})).map_err(err)?;
+    let widgets = {
+        let st = s.doc().map_err(err)?;
+        let mut shown = 0;
+        let ms = median_ms(9, || shown = CornerWidgets::showing(&st.doc, &st.selection, 8.0, true, true, 177.0).map_or(0, |w| w.visible().count()));
+        if shown != 4998 {
+            return Err(format!("the curved zig-zag shows {shown} corner widgets, not 4998"));
+        }
+        ms
+    };
+    let (mut radius, mut failed) = (0.3, None);
+    let round = median_ms(5, || {
+        radius += 0.01;
+        if let Err(e) = s.execute("object.setLiveShape", &json!({"id": id.0, "radius": radius})) {
+            failed = Some(format!("rounding the curved corners: {e}"));
+        }
+    });
+    match failed {
+        Some(e) => Err(e),
+        None => Ok((widgets, round)),
+    }
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut n = 50_000usize;
     let mut it = args.iter();
@@ -197,6 +242,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
     });
     rows.push(("handle drag, 5,000-anchor path (per move)", handle, 8.0));
     rows.push(("segment drag, 5,000-anchor path (per move)", segment, 8.0));
+    // Live Corners on curved sides: the widgets of a selected path (every frame) and a radius
+    // set on all its corners (every move of a widget drag).
+    let (widgets, round) = curved_corners(n).unwrap_or_else(|e| {
+        failed = Some(e);
+        (0.0, 0.0)
+    });
+    rows.push(("corner widgets, 5,000 curved corners", widgets, 8.0));
+    rows.push(("round 5,000 curved corners", round, 30.0));
     if let Some(e) = failed {
         return Err(e);
     }

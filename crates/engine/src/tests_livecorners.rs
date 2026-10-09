@@ -279,3 +279,42 @@ fn a_pen_path_rounds_its_corners_but_not_its_ends() {
     run(&mut s, json!({"id": e.0, "radius": 8}));
     assert_eq!(node_path(&s, e), before);
 }
+
+/// A pen path's corners where lines and curves meet round too, as Illustrator's Live Corners do:
+/// every corner but its ends and its smooth anchor, in one step, the smooth anchor staying smooth;
+/// another kind and back to square give the path back; a Direct-Selected anchor's corner rounds
+/// alone, its anchors staying selected.
+#[test]
+fn a_pen_path_rounds_its_curved_corners_too() {
+    use vectorcraft_geom::{AnchorKind, Point};
+    let (mut s, _) = session();
+    let pen = json!({"anchors": [
+        {"x": 90, "y": 230}, {"x": 10, "y": 230}, {"x": 10, "y": 220, "out": [8, 217]},
+        {"x": 6, "y": 205, "in": [6, 210], "out": [6, 150], "smooth": true},
+        {"x": 6, "y": 8}, {"x": 90, "y": 8}
+    ]});
+    let id = NodeId(s.execute("path.create", &pen).unwrap()["id"].as_u64().unwrap());
+    s.execute("select.set", &json!({"ids": [id.0]})).unwrap();
+    let (before, _) = node_path(&s, id);
+    let c = LiveCorners::of(s.doc().unwrap().doc.node(id).unwrap()).unwrap();
+    assert_eq!(c.all(), [1, 2, 4].into());
+    let undo = s.doc().unwrap().history.undo.len();
+    run(&mut s, json!({"radius": 4}));
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo + 1);
+    let (path, live) = node_path(&s, id);
+    assert!(matches!(&live, Some(LiveShape::Path { base, .. }) if *base == before), "{live:?}");
+    assert_eq!(path.anchor_count(), 9);
+    let (sp, was) = (&path.subpaths[0], &before.subpaths[0]);
+    assert_eq!((sp.anchors.first(), sp.anchors.last()), (was.anchors.first(), was.anchors.last()), "the ends stay");
+    assert!(sp.anchors.iter().any(|a| a.p == Point::new(6.0, 205.0) && a.kind == AnchorKind::Smooth));
+    assert_eq!(style(&s, id), (Some(4.0), Some(CornerKind::Round), 3));
+    run(&mut s, json!({"kind": "chamfer"}));
+    assert_eq!(style(&s, id), (Some(4.0), Some(CornerKind::Chamfer), 3));
+    run(&mut s, json!({"kind": "round", "radius": 0}));
+    assert_eq!(node_path(&s, id), (before, None));
+    s.execute("select.anchors", &json!({"id": id.0, "anchors": [[0, 2]], "mode": "set"})).unwrap();
+    run(&mut s, json!({"radius": 3}));
+    assert_eq!(node_path(&s, id).0.anchor_count(), 7);
+    assert_eq!(selected_anchors(&s, id), Some(anchors(&[2, 3])));
+    assert_eq!(radii::<6>(&s, id), [0.0, 0.0, 3.0, 0.0, 0.0, 0.0]);
+}

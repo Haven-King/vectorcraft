@@ -1254,8 +1254,8 @@ size. The journal entry of a scaling command records the `strokes` and `corners`
 ## Live Corners
 
 `object.setLiveShape {id?, ids?, radius?, kind?, corners?}` sets the corners of any path (one undo step): a live
-rectangle's or polygon's, a star's, a pen path's. A corner is an anchor without handles between two straight sides
-(not an open path's ends, not a smooth anchor, not one the sides run straight on through). `radius` (pt) and `kind`
+rectangle's or polygon's, a star's, a pen path's. A corner is an anchor whose sides, straight, curved or one of each,
+leave it at an angle (not an open path's ends, not a smooth anchor, not one the sides run straight on through). `radius` (pt) and `kind`
 (`round`, `invertedRound` or `chamfer`) go to the `corners` given, else to the corners holding a Direct-Selected
 anchor (`select.anchors`), else to every corner. `corners` are anchor indices of the path with its corners uncut,
 counting every subpath's anchors in order: a rectangle's 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left; a
@@ -1264,9 +1264,11 @@ Each corner keeps its own radius and kind (the shape's `live` in queries has `ra
 `kinds`); a corner with no radius is one anchor, a cut one two, and Direct-Selected corners stay selected as that
 changes. A path that isn't a live shape keeps its uncut outline (`live` `{"shape": "path", "base", "radii"}`) so its
 corners stay editable, and is a plain path again once no corner is cut; a polygon stays a live polygon, its corners
-keeping the radius they shared when `sides` changes. Every corner is a circular arc tangent to both sides: a radius
-draws no larger than takes the cut halfway along the corner's shorter side (half the shorter side of a rectangle, the
-same limit for its four corners), the corners stay circular through uneven scales (the radius scales by the mean scale,
+keeping the radius they shared when `sides` changes. Between straight sides every corner is a circular arc tangent to
+both; on a curved side the cut starts as far from the corner along the curve as it would on a straight side and meets
+the curve smoothly there, the rest of the curve kept as it was. A radius draws no larger than takes the cut halfway
+along the corner's shorter side, measured along a curved one (half the shorter side of a rectangle, the same limit for
+its four corners), the corners stay circular through uneven scales (the radius scales by the mean scale,
 or keeps its size with Scale Corners off), and a rectangle from a file that kept an uneven scale in its transform
 (elliptical corners) gets circular ones in document units when its corners are next set. Dragging a corner widget
 rounds the corners whose widgets show (every corner, or the Direct-Selected ones), outlining in red those that reach

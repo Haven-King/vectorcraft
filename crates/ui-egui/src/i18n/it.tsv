@@ -3339,7 +3339,7 @@ axis	Both	Entrambi
 @msg	file version {0} is newer than this VectorCraft supports ({VERSION})	la versione del file {0} è più recente di quelle supportate da questo VectorCraft ({VERSION})
 @msg	freeform point {i} needs `at` [x, y] and a valid `color`	il punto a forma libera {i} richiede `at` [x, y] e un `color` valido
 @msg	give both `start` and `end` [x, y] (or neither)	specifica sia `start` sia `end` [x, y] (o nessuno dei due)
-@msg	give corners of the path: anchors between two straight sides	specifica angoli del tracciato: punti di ancoraggio tra due lati diritti
+@msg	give corners of the path: corner anchors, not smooth ones or an open path's ends	specifica angoli del tracciato: punti d’angolo, né smussati né alle estremità di un tracciato aperto
 @msg	give the path `id` and the width point `index`	specifica l'`id` del tracciato e l'`index` del punto di larghezza
 @msg	guides are locked	le guide sono bloccate
 @msg	image '{key}' has no pixels and was left out	l'immagine '{key}' non ha pixel ed è stata omessa

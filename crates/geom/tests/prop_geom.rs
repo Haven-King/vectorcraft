@@ -235,6 +235,48 @@ proptest! {
         prop_assert!(d <= best_sample + 1e-6, "nearest {d} > sampled {best_sample}");
     }
 
+    /// Live Corners on random paths, curved sides and all: the cut path is finite, has one more
+    /// anchor per cut corner, maps back as `cut_sources` says, keeps what is left of every side on
+    /// its curve, and leaves a curved side smoothly where it rounds the corner.
+    #[test]
+    fn corners_cut_on_random_curves(p in arb_path_data(), r in 0.0..80.0f64, kind in 0usize..3) {
+        use kurbo::{ParamCurve, ParamCurveNearest};
+        use vectorcraft_geom::corners::{cut_corners, cut_sources, path_corners};
+        use vectorcraft_geom::shapes::CornerKind;
+        let kind = CornerKind::ALL[kind];
+        let n = p.anchor_count();
+        let corners = path_corners(&p);
+        let radii = vec![r; n];
+        let (cut, from) = cut_corners(&p, &radii, &vec![kind; n]);
+        prop_assert!(cut.anchors().all(|(_, _, a)| a.p.is_finite() && a.h_in.is_finite() && a.h_out.is_finite()));
+        prop_assert_eq!(&from, &cut_sources(&p, &corners, &radii));
+        prop_assert_eq!(cut.anchor_count(), n + corners.iter().filter(|c| c.fitted(r) > 1e-9).count());
+        let mut first = 0;
+        for ((sp, from), base) in cut.subpaths.iter().zip(&from).zip(&p.subpaths) {
+            let m = sp.anchors.len();
+            for o in 0..sp.segment_count() {
+                let (fa, fb) = (from[o], from[(o + 1) % m]);
+                if fa == fb {
+                    continue;
+                }
+                let (original, rest) = (base.segment(fa - first), sp.segment(o));
+                for t in [0.25, 0.5, 0.75] {
+                    let d = original.nearest(rest.eval(t), 1e-9).distance_sq.sqrt();
+                    prop_assert!(d < 1e-6, "segment {} at {} is {} off its curve", o, t, d);
+                }
+            }
+            if kind == CornerKind::Round {
+                for (o, a) in sp.anchors.iter().enumerate() {
+                    let (i, x) = (a.h_in - a.p, a.h_out - a.p);
+                    if corners.iter().any(|c| c.index == from[o]) && i.hypot() > 1e-6 && x.hypot() > 1e-6 {
+                        prop_assert!(i.cross(x).abs() <= 1e-6 * i.hypot() * x.hypot() && i.dot(x) < 0.0, "anchor {} {:?}", o, a);
+                    }
+                }
+            }
+            first += base.anchors.len();
+        }
+    }
+
     /// Regular polygons and stars: anchor counts, all anchors on their radius, closed.
     #[test]
     fn polygon_and_star_shapes(c in arb_point(0.0, 100.0), r in 1.0..100.0f64, n in 3u32..20, rot in -360.0..360.0f64, k in 0.1..0.9f64) {

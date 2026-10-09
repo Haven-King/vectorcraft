@@ -590,3 +590,53 @@ fn text_commands_with_junk_params_on_inline_graphics() {
     }
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// Live Corners on curved corners with junk handles (on the anchor, a hair off it, huge, past
+/// the curve size limit) and junk radii, every kind: never a panic, never a broken tree, never a
+/// coordinate that isn't a number, and the document still saves and reopens.
+#[test]
+fn live_corners_on_curved_junk() {
+    let handles = [
+        json!([8, 217]),
+        json!([10, 220]),
+        json!([10.000000000001, 220]),
+        json!([10, 1e-300]),
+        json!([6, 205]),
+        json!([90, 230]),
+        json!([1e13, 0]),
+        json!([1e308, 1e308]),
+        json!([-1e308, 1e308]),
+    ];
+    let radii = [json!(0), json!(1e-300), json!(4), json!(1e6), json!(1e308), json!(-1), json!("x"), json!(null)];
+    for h in &handles {
+        for radius in &radii {
+            for kind in ["round", "invertedRound", "chamfer"] {
+                let mut s = Fixture::Single.session();
+                let pen = json!({"anchors": [
+                    {"x": 90, "y": 230}, {"x": 10, "y": 230}, {"x": 10, "y": 220, "out": h},
+                    {"x": 6, "y": 205, "in": h, "out": [6, 150]},
+                    {"x": 6, "y": 8, "in": h}, {"x": 90, "y": 8}
+                ], "closed": true});
+                let ran = catch_quiet(|| {
+                    let id = s.execute("path.create", &pen)?["id"].clone();
+                    s.execute("object.setLiveShape", &json!({"id": id, "radius": radius, "kind": kind}))
+                });
+                if let Err(msg) = ran {
+                    panic!("PANIC {h} {radius} {kind}: {msg}");
+                }
+                check_session(&s).unwrap_or_else(|e| panic!("{h} {radius} {kind}: {e}"));
+                let doc = &s.doc().unwrap().doc;
+                let mut finite = true;
+                for layer in &doc.layers {
+                    layer.walk(&mut |n| {
+                        if let vectorcraft_engine::doc::NodeKind::Path { path, .. } = &n.kind {
+                            finite &= path.anchors().all(|(_, _, a)| [a.p, a.h_in, a.h_out].iter().all(|p| p.is_finite()));
+                        }
+                    });
+                }
+                assert!(finite, "{h} {radius} {kind}: a coordinate isn't a number");
+                vectorcraft_testkit::invariants::check_native_roundtrip(doc).unwrap_or_else(|e| panic!("{h} {radius} {kind}: {e}"));
+            }
+        }
+    }
+}

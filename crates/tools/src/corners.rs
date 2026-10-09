@@ -1,6 +1,8 @@
 //! Live Corners: the widgets inside the corners of a selected path. The Selection tool shows them
 //! on a live rectangle or polygon, Direct Selection on any path (a star, a pen path) at each corner
-//! anchor: one without handles between two straight sides. Dragging one rounds (or sharpens) the
+//! anchor: one that isn't smooth, whose sides (straight, curved or one of each) leave it at an
+//! angle. A widget sits on the bisector of the directions its sides leave in, inside that angle
+//! (outside the fill where the corner turns away from it). Dragging one rounds (or sharpens) the
 //! corners whose widgets show together: every corner when the whole path is selected, those with a
 //! selected anchor when Direct Selection picked some. Alt-clicking a widget cycles their corner
 //! kind (round, inverted round, chamfer); double-clicking one opens the Corners dialog. The
@@ -598,7 +600,8 @@ mod tests {
         assert!(red, "six arcs at the limit");
     }
 
-    /// A pen path's middle corner shows a widget; its ends and curved corners don't.
+    /// A pen path's middle corners show widgets, the one leaving a line for a curve too (on its
+    /// bisector, by the curve's direction there); its ends don't.
     #[test]
     fn a_pen_path_shows_widgets_on_its_corners_only() {
         let mut sp = vectorcraft_geom::SubPath::polyline(
@@ -606,11 +609,97 @@ mod tests {
             false,
         );
         sp.anchors[2].h_out = Point::new(250.0, 350.0);
-        let (d, id) = doc_with(PathData::single(sp), None);
+        let path = PathData::single(sp);
+        let (d, id) = doc_with(path.clone(), None);
         let s = selected(id);
         let p = paint();
         let w = CornerWidgets::for_tool(&cx(&d, &s, &p), true).unwrap();
-        assert_eq!(w.corners(), [1]);
-        assert_eq!(pts(&w), [Point::new(290.0, 110.0)]);
+        assert_eq!(w.corners(), [1, 2]);
+        let curved = vectorcraft_geom::corners::path_corners(&path)[1];
+        assert!((curved.angle_deg() - 135.0).abs() < 1e-9);
+        assert_eq!(pts(&w), [Point::new(290.0, 110.0), curved.on_bisector(MIN_INSET_PX / (1.0 + curved.cos()).sqrt())]);
+    }
+
+    /// An open path like a frame's side, where lines and curves meet: Direct Selection shows the
+    /// widgets of its foot's corner, of the corner leaving it for a curve and of the right angle a
+    /// long curve arrives at, not its ends' nor its smooth anchor's. Dragging one rounds them all;
+    /// past the right angle's limit its cut, starting on the curve, outlines in red.
+    #[test]
+    fn curved_corners_show_widgets_and_round_with_direct_selection() {
+        use vectorcraft_geom::hit::fill_contains;
+        use vectorcraft_geom::kurbo::ParamCurveNearest;
+        use vectorcraft_geom::{Anchor, FillRule, PathEl, SubPath};
+        let corner = |x: f64, y: f64| Anchor::corner(Point::new(x, y));
+        let mut leave = corner(10.0, 220.0);
+        leave.h_out = Point::new(8.0, 217.0);
+        let smooth = Anchor::with_handles(Point::new(6.0, 205.0), Point::new(6.0, 210.0), Point::new(6.0, 150.0));
+        let path =
+            PathData::single(SubPath::new(vec![corner(90.0, 230.0), corner(10.0, 230.0), leave, smooth, corner(6.0, 8.0), corner(90.0, 8.0)], false));
+        let (d, id) = doc_with(path.clone(), None);
+        let s = selected(id);
+        let p = paint();
+        let c = ToolContext { zoom: 4.0, ..cx(&d, &s, &p) };
+        let w = CornerWidgets::for_tool(&c, true).unwrap();
+        assert_eq!(w.corners(), [1, 2, 4]);
+        // The foot's and the right angle's widgets sit inside the fill; the corner leaving the
+        // foot turns away from it, so its widget sits in its angle, outside, as a star's inner
+        // corners' do.
+        let fill = path.to_bezpath();
+        let inside = |q: Point| fill_contains(&fill, FillRule::NonZero, q);
+        let [foot, leaving, right] = [pts(&w)[0], pts(&w)[1], pts(&w)[2]];
+        assert!(inside(foot) && inside(right) && !inside(leaving), "{:?}", pts(&w));
+        let mut t = crate::create("directSelection");
+        assert!(t.pointer(&c, &PointerEvent::new(PointerKind::Down, right.x, right.y)).is_empty());
+        let a = t.pointer(&c, &PointerEvent::new(PointerKind::Drag, right.x + 5.0, right.y + 5.0));
+        assert_eq!(a[0], Action::Begin("Corner Radius".into()));
+        let k = vectorcraft_geom::corners::path_corners(&path)[2];
+        assert!((radius(&a[1]) - k.radius_change(Vec2::new(5.0, 5.0))).abs() < 1e-9, "{a:?}");
+        assert!(matches!(&a[1], Action::Preview(_, v) if v.get("corners").is_none()), "every corner: {a:?}");
+        // Past its limit (half its 84 pt top) the right angle's cut, from the long curve, is red.
+        let a = t.pointer(&c, &PointerEvent::new(PointerKind::Drag, right.x + 100.0, right.y + 100.0));
+        assert!((radius(&a[0]) - k.max_radius()).abs() < 1e-9 && (k.max_radius() - 42.0).abs() < 1e-9, "{a:?}");
+        let curve = path.subpaths[0].segment(3);
+        let starts: Vec<Point> = t
+            .overlays(&c)
+            .into_iter()
+            .filter_map(|o| match o {
+                Overlay::Path { color, path, .. } if color == crate::builder::HIGHLIGHT_RED => Some(path),
+                _ => None,
+            })
+            .flat_map(|p| p.elements().iter().filter_map(|e| if let PathEl::MoveTo(q) = e { Some(*q) } else { None }).collect::<Vec<_>>())
+            .collect();
+        assert!(starts.iter().any(|q| curve.nearest(*q, 1e-12).distance_sq < 1e-12 && q.distance(Point::new(6.0, 8.0)) > 40.0), "{starts:?}");
+        assert_eq!(t.pointer(&c, &PointerEvent::new(PointerKind::Up, right.x + 100.0, right.y + 100.0)), vec![Action::Commit]);
+    }
+
+    /// A curved corner's handle starts in the corner, so its end can lie over the widget: there
+    /// Direct Selection drags the handle, beside it the widget.
+    #[test]
+    fn a_handle_end_over_a_widget_drags_the_handle() {
+        let a = 20f64.to_radians();
+        let v = Vec2::new(a.cos(), -a.sin());
+        let at = Point::new(100.0, 100.0);
+        let mut sp = vectorcraft_geom::SubPath::polyline(&[Point::new(300.0, 100.0), at, at + v * 200.0], false);
+        let end = at + v * (10.0 * 2f64.sqrt());
+        sp.anchors[1].h_out = end;
+        let (d, id) = doc_with(PathData::single(sp), None);
+        let s = selected(id);
+        let p = paint();
+        let c = cx(&d, &s, &p);
+        let w = pts(&CornerWidgets::for_tool(&c, true).unwrap())[0];
+        assert!(w.distance(end) < c.point_tol(), "{w:?} {end:?}");
+        let mut t = crate::create("directSelection");
+        assert_ne!(t.cursor(&c, w, Mods::default()), crate::Cursor::CornerRadius);
+        assert_eq!(t.pointer(&c, &PointerEvent::new(PointerKind::Down, w.x, w.y)), vec![Action::Begin("Reshape".into())]);
+        let drag = t.pointer(&c, &PointerEvent::new(PointerKind::Drag, w.x + 5.0, w.y + 5.0));
+        assert!(matches!(&drag[..], [Action::Preview(cmd, _)] if cmd == "path.setHandle"), "{drag:?}");
+        t.pointer(&c, &PointerEvent::new(PointerKind::Up, w.x + 5.0, w.y + 5.0));
+        // On the widget's far side, out of the handle end's reach, the widget drags the corner.
+        let beside = w + (w - end) / (w - end).hypot() * 2.5;
+        assert!(beside.distance(end) > c.point_tol());
+        assert_eq!(t.cursor(&c, beside, Mods::default()), crate::Cursor::CornerRadius);
+        assert!(t.pointer(&c, &PointerEvent::new(PointerKind::Down, beside.x, beside.y)).is_empty());
+        let drag = t.pointer(&c, &PointerEvent::new(PointerKind::Drag, beside.x + 5.0, beside.y));
+        assert_eq!(drag[0], Action::Begin("Corner Radius".into()));
     }
 }

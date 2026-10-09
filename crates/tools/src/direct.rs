@@ -324,13 +324,17 @@ impl Tool for DirectSelectionTool {
                     vec![Action::Exec("select.set".into(), json!({"ids": [target.0]}))]
                 }
             }
-            (PointerKind::DoubleClick, _) if !self.group => corners::double_click(cx, p, true).into_iter().collect(),
+            (PointerKind::DoubleClick, _) if !self.group => {
+                corners::double_click(cx, p, true).filter(|_| hit_handle(cx, p, point).is_none()).into_iter().collect()
+            }
             (PointerKind::Move, State::Idle) => {
                 self.hover = if self.group || !cx.highlight_anchors { None } else { hovered_anchor(cx, p) };
                 vec![]
             }
             (PointerKind::Down, _) => {
-                if let Some(c) = CornerDrag::hit(cx, ev, true) {
+                // A handle end over a corner widget (a curved corner's handles start inside it)
+                // is the handle's.
+                if let Some(c) = CornerDrag::hit(cx, ev, true).filter(|_| hit_handle(cx, p, point).is_none()) {
                     self.state = State::Corner(c);
                     return vec![];
                 }
@@ -604,7 +608,7 @@ impl Tool for DirectSelectionTool {
         }
     }
     fn cursor(&self, cx: &ToolContext, p: Point, _m: Mods) -> Cursor {
-        if !self.group && (matches!(self.state, State::Corner(_)) || over_widget(cx, p, true)) {
+        if !self.group && (matches!(self.state, State::Corner(_)) || (over_widget(cx, p, true) && hit_handle(cx, p, cx.point_tol()).is_none())) {
             return Cursor::CornerRadius;
         }
         if !self.group && (matches!(self.state, State::Bracket(_)) || over_bracket(cx, p)) {
